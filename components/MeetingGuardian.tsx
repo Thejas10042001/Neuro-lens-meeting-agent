@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as toxicity from '@tensorflow-models/toxicity';
 import '@tensorflow/tfjs';
@@ -54,7 +53,7 @@ const MeetingGuardian: React.FC = () => {
     const [meetingLink, setMeetingLink] = useState("");
     const [meetingCode, setMeetingCode] = useState("");
     const [generatedMeeting, setGeneratedMeeting] = useState<{link: string, id: string, pin: string} | null>(null);
-    const [aiStatus, setAiStatus] = useState<"Not connected" | "Waiting for screen share..." | "Connected to meeting ✅" | "Loading Models...">("Loading Models...");
+    const [aiStatus, setAiStatus] = useState<string>("Loading Models...");
     
     // Models
     const [modelsLoaded, setModelsLoaded] = useState(false);
@@ -293,8 +292,8 @@ const MeetingGuardian: React.FC = () => {
                     // predictions is array of { label, results: [{ match: boolean, probabilities: [...] }] }
                     
                     const detectedLabels = predictions
-                        .filter(p => p.results[0].match === true)
-                        .map(p => p.label);
+                        .filter((p: any) => p.results[0].match === true)
+                        .map((p: any) => p.label);
                     
                     if (detectedLabels.length > 0) {
                         const evt: ToxicityEvent = {
