@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "NeuroLens AI Coach",
+  "version": "1.0",
+  "description": "Real-time cognitive feedback overlay for Google Meet.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://meet.google.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icon.png"],
+      "matches": ["https://meet.google.com/*"]
+    }
+  ]
+}

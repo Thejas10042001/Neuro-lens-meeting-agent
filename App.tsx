@@ -35,10 +35,10 @@ const App: React.FC = () => {
           </div>
 
           {/* Mode Switcher */}
-          <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex items-center gap-1">
+          <div className="bg-gray-900 p-1.5 rounded-lg border border-gray-800 flex items-center gap-1 overflow-x-auto max-w-full">
             <button
               onClick={() => setMode('personal')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${
                 mode === 'personal' 
                   ? 'bg-gray-800 text-white shadow-lg shadow-cyan-500/10 border border-gray-700' 
                   : 'text-gray-400 hover:text-gray-200'
@@ -49,7 +49,7 @@ const App: React.FC = () => {
             </button>
             <button
               onClick={() => setMode('meeting')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${
                 mode === 'meeting' 
                   ? 'bg-gray-800 text-white shadow-lg shadow-violet-500/10 border border-gray-700' 
                   : 'text-gray-400 hover:text-gray-200'
@@ -63,7 +63,7 @@ const App: React.FC = () => {
 
         {/* Main Content Area */}
         <div className="animate-fade-in-right">
-          {mode === 'personal' ? (
+          {mode === 'personal' && (
             <>
               {/* Personal Dashboard */}
               <section className="mb-12">
@@ -101,10 +101,10 @@ const App: React.FC = () => {
                 </div>
               </section>
             </>
-          ) : (
-            <>
-              {/* Meeting Agent Section */}
-              <section className="mb-12">
+          )}
+
+          {mode === 'meeting' && (
+            <section className="mb-12">
                 <div className="flex items-center gap-3 mb-8">
                     <div className="p-2 bg-violet-500/10 rounded-lg">
                       <PresentationChartLineIcon className="w-8 h-8 text-violet-400" />
@@ -115,8 +115,7 @@ const App: React.FC = () => {
                     </div>
                  </div>
                  <MeetingAgent />
-              </section>
-            </>
+            </section>
           )}
         </div>
 

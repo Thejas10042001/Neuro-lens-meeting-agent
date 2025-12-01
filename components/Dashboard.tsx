@@ -572,7 +572,7 @@ const Dashboard: React.FC = () => {
             attentionHistoryRef.current.push(newPoint.attention);
             if (attentionHistoryRef.current.length > RECENT_ATTENTION_WINDOW) attentionHistoryRef.current.shift();
             
-        }, 1500);
+        }, 1000);
 
         return () => clearInterval(interval);
     }, [addNotification, playAlertSound]);
