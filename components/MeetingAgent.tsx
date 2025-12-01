@@ -362,7 +362,7 @@ const MeetingAgent: React.FC = () => {
             // Audio Level Analysis (System Audio Volume)
             let audioVolume = 0;
             if (analyserRef.current && dataArrayRef.current) {
-                analyserRef.current.getByteFrequencyData(dataArrayRef.current);
+                analyserRef.current.getByteFrequencyData(dataArrayRef.current as any);
                 const sum = dataArrayRef.current.reduce((a, b) => a + b, 0);
                 audioVolume = sum / dataArrayRef.current.length; // 0-255 approx
             }
