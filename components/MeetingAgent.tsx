@@ -1,17 +1,31 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { CameraIcon } from './icons/CameraIcon';
 import { ExclamationIcon } from './icons/ExclamationIcon';
 import { ZapIcon } from './icons/ZapIcon';
 import { UserGroupIcon } from './icons/UserGroupIcon';
 import { DownloadIcon } from './icons/DownloadIcon';
+import { EyeIcon } from './icons/EyeIcon';
 
 interface MeetingDataPoint {
   time: number;
   sentiment: number; // 0-100 (Negative to Positive)
   engagement: number; // 0-100 (Low to High)
-  dominance: number; // 0-100 (Who is speaking dominance)
+}
+
+interface Highlight {
+  time: string;
+  text: string;
+  type: 'positive' | 'negative' | 'neutral';
+}
+
+interface ParticipantMetric {
+  id: number;
+  label: string;
+  activity: number; // 0-100 (Motion)
+  focus: number; // 0-100 (Stability)
+  isSpeaking: boolean;
 }
 
 const MeetingAgent: React.FC = () => {
@@ -20,12 +34,26 @@ const MeetingAgent: React.FC = () => {
   const [meetingUrl, setMeetingUrl] = useState('');
   const [sharingSource, setSharingSource] = useState<string | null>(null);
   const [data, setData] = useState<MeetingDataPoint[]>([]);
-  const [highlights, setHighlights] = useState<{time: string, text: string, type: 'positive'|'negative'|'neutral'}[]>([]);
+  const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [error, setError] = useState<string | null>(null);
   
+  // Grid-based participant state (Assuming 2x2 grid for MVP)
+  const [participants, setParticipants] = useState<ParticipantMetric[]>([
+    { id: 0, label: "Top-Left", activity: 0, focus: 0, isSpeaking: false },
+    { id: 1, label: "Top-Right", activity: 0, focus: 0, isSpeaking: false },
+    { id: 2, label: "Btm-Left", activity: 0, focus: 0, isSpeaking: false },
+    { id: 3, label: "Btm-Right", activity: 0, focus: 0, isSpeaking: false },
+  ]);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const processingRef = useRef(false);
+  const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
+  
+  // Audio Analysis Refs
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const dataArrayRef = useRef<Uint8Array | null>(null);
 
   // Analyze the video frame to guess meeting dynamics
   const analyzeFrame = useCallback(() => {
@@ -33,58 +61,127 @@ const MeetingAgent: React.FC = () => {
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     
+    // Ensure context availability
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx || video.paused || video.ended) return;
 
-    // Use a small resolution for performance
-    canvas.width = 100;
-    canvas.height = 75;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    // Use a fixed low resolution for grid analysis (320x240)
+    // This gives us a 160x120 quadrant size
+    const width = 320;
+    const height = 240;
     
-    const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = frame.data;
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
     
-    let totalBrightness = 0;
-    let totalVariation = 0;
+    try {
+        ctx.drawImage(video, 0, 0, width, height);
+        const frame = ctx.getImageData(0, 0, width, height);
+        const currentData = frame.data;
+        const prevData = prevFrameRef.current;
 
-    // Simple heuristic: 
-    // High variation in pixel brightness usually means movement (people gesturing, speaking).
-    // Brightness shifts can imply screen sharing changes or active speaker switching.
-    for (let i = 0; i < data.length; i += 4) {
-       const r = data[i];
-       const g = data[i + 1];
-       const b = data[i + 2];
-       const brightness = (r + g + b) / 3;
-       totalBrightness += brightness;
-       
-       // Calculate variation from a mid-grey to detect contrast (features)
-       totalVariation += Math.abs(brightness - 128);
+        // Audio Level Analysis
+        let audioVolume = 0;
+        if (analyserRef.current && dataArrayRef.current) {
+            analyserRef.current.getByteFrequencyData(dataArrayRef.current);
+            const sum = dataArrayRef.current.reduce((a, b) => a + b, 0);
+            audioVolume = sum / dataArrayRef.current.length; // 0-255 approx
+        }
+        const isAudioActive = audioVolume > 20; // Threshold for speech
+
+        // Grid Analysis: 2x2
+        // Quad 0: 0,0 to w/2, h/2
+        // Quad 1: w/2,0 to w, h/2
+        // Quad 2: 0,h/2 to w/2, h
+        // Quad 3: w/2,h/2 to w, h
+        
+        const quadrants = [
+            { x: 0, y: 0, w: width / 2, h: height / 2, motion: 0, pixels: 0 },
+            { x: width / 2, y: 0, w: width / 2, h: height / 2, motion: 0, pixels: 0 },
+            { x: 0, y: height / 2, w: width / 2, h: height / 2, motion: 0, pixels: 0 },
+            { x: width / 2, y: height / 2, w: width / 2, h: height / 2, motion: 0, pixels: 0 }
+        ];
+
+        let totalMotion = 0;
+
+        if (prevData) {
+            for (let y = 0; y < height; y += 4) { // Skip pixels for performance
+                for (let x = 0; x < width; x += 4) {
+                    const i = (y * width + x) * 4;
+                    
+                    // Simple RGB difference
+                    const diff = Math.abs(currentData[i] - prevData[i]) + 
+                                 Math.abs(currentData[i+1] - prevData[i+1]) + 
+                                 Math.abs(currentData[i+2] - prevData[i+2]);
+                    
+                    if (diff > 50) { // Noise threshold
+                         // Determine quadrant
+                         const qIdx = (x >= width / 2 ? 1 : 0) + (y >= height / 2 ? 2 : 0);
+                         quadrants[qIdx].motion += diff;
+                         totalMotion += diff;
+                    }
+                    quadrants[(x >= width / 2 ? 1 : 0) + (y >= height / 2 ? 2 : 0)].pixels++;
+                }
+            }
+        }
+
+        // Save current frame for next loop
+        prevFrameRef.current = new Uint8ClampedArray(currentData);
+
+        // Update Participant State
+        setParticipants(prevParts => {
+            return prevParts.map((p, idx) => {
+                const q = quadrants[idx];
+                const rawActivity = q.motion / (q.pixels || 1); 
+                // Normalize activity: usually 0-10 range, scale to 0-100
+                const normalizedActivity = Math.min(100, rawActivity * 5); 
+                
+                // Focus is stability (inverse of high erratic motion, but moderate motion is ok)
+                // If activity is very high (>80), focus drops.
+                const focus = Math.max(0, 100 - (normalizedActivity * 0.8));
+
+                // Heuristic: Highest activity quadrant gets "Speaking" status if audio is loud enough
+                // To prevent flickering, we can use a simpler check:
+                // If this quadrant has significant motion AND audio is present, likely speaking.
+                const likelySpeaking = isAudioActive && normalizedActivity > 15;
+
+                // Smooth updates
+                return {
+                    ...p,
+                    activity: (p.activity * 0.7) + (normalizedActivity * 0.3),
+                    focus: (p.focus * 0.8) + (focus * 0.2),
+                    isSpeaking: likelySpeaking
+                };
+            });
+        });
+
+        // Global Stats derived from grid
+        const avgActivity = totalMotion / (width * height / 16); // Normalize
+        const calculatedEngagement = Math.min(100, Math.max(10, avgActivity * 2));
+        
+        // Simulate sentiment fluctuation based on "energy" (engagement)
+        const randomSentimentFlux = (Math.random() - 0.5) * 5;
+        
+        setData(prev => {
+            const last = prev[prev.length - 1] || { sentiment: 60, engagement: 50 };
+            let newSentiment = last.sentiment + randomSentimentFlux;
+            
+            // High engagement slightly boosts sentiment (productive meeting)
+            if (calculatedEngagement > 60) newSentiment += 0.5;
+            
+            return [...prev.slice(-40), {
+                time: Date.now(),
+                sentiment: Math.max(0, Math.min(100, newSentiment)),
+                engagement: (last.engagement * 0.7) + (calculatedEngagement * 0.3), // Smooth it
+            }];
+        });
+
+        if (processingRef.current) {
+            requestAnimationFrame(analyzeFrame);
+        }
+    } catch (e) {
+        console.error("Frame analysis failed", e);
     }
-    
-    const avgBrightness = totalBrightness / (canvas.width * canvas.height);
-    const avgVariation = totalVariation / (canvas.width * canvas.height);
-
-    // Normalize variation (0-50 usually) to 0-100 engagement
-    const calculatedEngagement = Math.min(100, Math.max(10, avgVariation * 2.5));
-    
-    const randomSentimentFlux = (Math.random() - 0.5) * 5;
-    
-    setData(prev => {
-        const last = prev[prev.length - 1] || { sentiment: 60, engagement: 50 };
-        let newSentiment = last.sentiment + randomSentimentFlux;
-        
-        if (calculatedEngagement > 60) newSentiment += 0.5;
-        
-        return [...prev.slice(-40), {
-            time: Date.now(),
-            sentiment: Math.max(0, Math.min(100, newSentiment)),
-            engagement: (last.engagement * 0.7) + (calculatedEngagement * 0.3), // Smooth it
-            dominance: Math.random() * 100 // Placeholder for audio analysis
-        }];
-    });
-
-    requestAnimationFrame(analyzeFrame);
   }, []);
 
   const handleConnectClick = () => {
@@ -96,30 +193,48 @@ const MeetingAgent: React.FC = () => {
     setIsConfirming(false);
     setError(null);
     try {
+        // @ts-ignore
         const stream = await navigator.mediaDevices.getDisplayMedia({
             video: {
                 width: 1280,
                 height: 720,
-                displaySurface: 'browser' // Hint to browser to show tabs first if supported
+                displaySurface: 'browser' 
             },
-            audio: true
+            audio: true // Important for speaker detection
         });
 
         if (videoRef.current) {
             videoRef.current.srcObject = stream;
             
-            // Extract the label (e.g. "Meet - Daily Standup")
             const track = stream.getVideoTracks()[0];
             setSharingSource(track.label || "External Window");
 
+            // Setup Audio Analysis if available
+            const audioTrack = stream.getAudioTracks()[0];
+            if (audioTrack) {
+                try {
+                    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+                    const audioCtx = new AudioContextClass();
+                    const source = audioCtx.createMediaStreamSource(stream);
+                    const analyser = audioCtx.createAnalyser();
+                    analyser.fftSize = 256;
+                    source.connect(analyser);
+                    
+                    audioContextRef.current = audioCtx;
+                    analyserRef.current = analyser;
+                    dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
+                } catch (e) {
+                    console.warn("Audio analysis setup failed", e);
+                }
+            }
+
             videoRef.current.onloadedmetadata = () => {
-                videoRef.current?.play();
+                videoRef.current?.play().catch(console.error);
                 processingRef.current = true;
                 setIsLive(true);
                 analyzeFrame();
             };
 
-             // Handle stream stop (user clicks "Stop sharing")
             track.onended = () => {
                 stopCapture();
             };
@@ -129,9 +244,8 @@ const MeetingAgent: React.FC = () => {
 
     } catch (err) {
         console.error("Error sharing screen:", err);
-        // Don't show error if user just cancelled
         if ((err as Error).name !== 'NotAllowedError') {
-             setError("Failed to connect to screen. Please try again.");
+             setError("Failed to connect to screen. Please ensure permissions are granted.");
         }
     }
   };
@@ -141,12 +255,30 @@ const MeetingAgent: React.FC = () => {
     setIsLive(false);
     setSharingSource(null);
     if (videoRef.current && videoRef.current.srcObject) {
-        const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-        tracks.forEach(t => t.stop());
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(t => t.stop());
         videoRef.current.srcObject = null;
+    }
+    if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
     }
     setHighlights(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "Meeting session ended", type: 'neutral' }]);
   };
+
+  useEffect(() => {
+    // Cleanup on unmount
+    return () => {
+        processingRef.current = false;
+        if (videoRef.current && videoRef.current.srcObject) {
+            const stream = videoRef.current.srcObject as MediaStream;
+            stream.getTracks().forEach(t => t.stop());
+        }
+        if (audioContextRef.current) {
+            audioContextRef.current.close();
+        }
+    };
+  }, []);
 
   useEffect(() => {
     if (!isLive || data.length < 2) return;
@@ -154,6 +286,7 @@ const MeetingAgent: React.FC = () => {
     const latest = data[data.length - 1];
     const prev = data[data.length - 2];
     
+    // Highlight generation logic
     if (latest.engagement > 85 && prev.engagement <= 85) {
         setHighlights(h => [...h, { time: new Date().toLocaleTimeString(), text: "High Group Engagement detected", type: 'positive' }].slice(-5));
     }
@@ -183,15 +316,14 @@ const MeetingAgent: React.FC = () => {
                     </div>
                     
                     <p className="text-gray-400 mb-6 text-sm leading-relaxed">
-                        To analyze group dynamics, NeuroLens needs to "see" the meeting. When the browser prompt appears:
+                        To analyze group dynamics, NeuroLens needs to "see" the meeting.
                     </p>
                     
                     <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700/50 mb-8">
                         <ol className="text-sm text-gray-300 space-y-3 list-decimal list-inside">
-                            <li>Select the <strong className="text-white">Chrome Tab</strong> option</li>
-                            <li>Choose the tab running <strong className="text-white">Google Meet</strong> or <strong className="text-white">Zoom</strong></li>
-                            <li>Ensure <strong className="text-white">Share tab audio</strong> is checked</li>
-                            <li>Click <strong className="text-cyan-400">Share</strong></li>
+                            <li>Select the <strong className="text-white">Chrome Tab</strong> option.</li>
+                            <li>Choose the tab running <strong className="text-white">Google Meet</strong> or <strong className="text-white">Zoom</strong>.</li>
+                            <li>Ensure <strong className="text-white">Share tab audio</strong> is checked for speaker detection.</li>
                         </ol>
                     </div>
 
@@ -275,7 +407,7 @@ const MeetingAgent: React.FC = () => {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Left: Video Feed */}
+            {/* Left: Video Feed with Grid Overlays */}
             <div className="lg:col-span-2">
                 <div className={`relative bg-black rounded-xl overflow-hidden aspect-video border shadow-2xl transition-colors duration-500 ${isLive ? 'border-violet-500/30' : 'border-gray-800'}`}>
                     {!isLive && (
@@ -287,8 +419,29 @@ const MeetingAgent: React.FC = () => {
                     <video ref={videoRef} className="w-full h-full object-contain" />
                     <canvas ref={canvasRef} className="hidden" />
                     
+                    {/* Analysis Overlays - Displayed only when active */}
+                    {isLive && participants.map((p, idx) => (
+                        <div 
+                            key={p.id}
+                            className={`absolute border-2 transition-all duration-300 flex items-start justify-start p-2
+                                ${idx === 0 ? 'top-0 left-0 w-1/2 h-1/2' : ''}
+                                ${idx === 1 ? 'top-0 right-0 w-1/2 h-1/2' : ''}
+                                ${idx === 2 ? 'bottom-0 left-0 w-1/2 h-1/2' : ''}
+                                ${idx === 3 ? 'bottom-0 right-0 w-1/2 h-1/2' : ''}
+                                ${p.activity > 15 ? 'border-cyan-500/40 bg-cyan-500/5' : 'border-transparent'}
+                            `}
+                        >
+                            {p.activity > 15 && (
+                                <div className="bg-black/60 text-cyan-400 text-[10px] px-1.5 py-0.5 rounded backdrop-blur-sm border border-cyan-500/30 font-mono flex items-center gap-1">
+                                    {p.isSpeaking && <span className="block w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>}
+                                    {p.label} {Math.round(p.activity)}%
+                                </div>
+                            )}
+                        </div>
+                    ))}
+
                     {isLive && (
-                        <div className="absolute top-4 left-4 bg-red-600/90 text-white text-[10px] font-bold px-2 py-1 rounded flex items-center gap-2 backdrop-blur-sm tracking-widest border border-red-500/50">
+                        <div className="absolute top-4 left-4 bg-red-600/90 text-white text-[10px] font-bold px-2 py-1 rounded flex items-center gap-2 backdrop-blur-sm tracking-widest border border-red-500/50 z-10">
                             <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></span>
                             LIVE ANALYSIS
                         </div>
@@ -331,39 +484,45 @@ const MeetingAgent: React.FC = () => {
             {/* Right: Metrics & Highlights */}
             <div className="flex flex-col gap-6">
                 
-                {/* Live Gauges */}
+                {/* Individual Participant Analysis */}
                 <div className="bg-gray-900/50 p-6 rounded-xl border border-gray-800">
-                    <h3 className="text-gray-300 font-semibold mb-6 text-sm uppercase tracking-wider">Real-time Metrics</h3>
-                    <div className="space-y-6">
-                        <div>
-                            <div className="flex justify-between text-sm mb-2">
-                                <span className="text-gray-400">Team Engagement</span>
-                                <span className="text-cyan-400 font-bold">{data.length ? Math.round(data[data.length-1].engagement) : 0}%</span>
+                     <h3 className="text-gray-300 font-semibold mb-4 text-sm uppercase tracking-wider flex items-center gap-2">
+                        <UserGroupIcon className="w-4 h-4 text-cyan-400" />
+                        Active Participants (2x2 Grid)
+                    </h3>
+                    <div className="space-y-4">
+                        {participants.map((p) => (
+                            <div key={p.id} className="bg-gray-800/40 p-3 rounded-lg border border-gray-700/50 hover:border-gray-600 transition-colors">
+                                <div className="flex justify-between items-center mb-2">
+                                    <div className="flex items-center gap-2">
+                                        <div className={`w-2 h-2 rounded-full ${p.isSpeaking ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`}></div>
+                                        <span className="text-sm font-medium text-gray-200">{p.label}</span>
+                                    </div>
+                                    <span className="text-xs text-gray-500 font-mono">
+                                        {p.isSpeaking ? 'SPEAKING' : p.activity > 10 ? 'ACTIVE' : 'IDLE'}
+                                    </span>
+                                </div>
+                                <div className="space-y-1.5">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[10px] text-gray-400 w-12">Focus</span>
+                                        <div className="flex-grow bg-gray-700 rounded-full h-1 overflow-hidden">
+                                            <div className="bg-cyan-400 h-1 rounded-full transition-all duration-500" style={{ width: `${p.focus}%` }}></div>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[10px] text-gray-400 w-12">Energy</span>
+                                        <div className="flex-grow bg-gray-700 rounded-full h-1 overflow-hidden">
+                                            <div className="bg-violet-400 h-1 rounded-full transition-all duration-500" style={{ width: `${p.activity}%` }}></div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                            <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                                <div 
-                                    className="bg-cyan-400 h-1.5 rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(34,211,238,0.5)]" 
-                                    style={{ width: `${data.length ? data[data.length-1].engagement : 0}%` }}
-                                ></div>
-                            </div>
-                        </div>
-                        <div>
-                            <div className="flex justify-between text-sm mb-2">
-                                <span className="text-gray-400">Positive Sentiment</span>
-                                <span className="text-violet-400 font-bold">{data.length ? Math.round(data[data.length-1].sentiment) : 0}%</span>
-                            </div>
-                            <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                                <div 
-                                    className="bg-violet-400 h-1.5 rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(139,92,246,0.5)]" 
-                                    style={{ width: `${data.length ? data[data.length-1].sentiment : 0}%` }}
-                                ></div>
-                            </div>
-                        </div>
+                        ))}
                     </div>
                 </div>
 
                 {/* Highlights Feed */}
-                <div className="bg-gray-900/50 p-6 rounded-xl border border-gray-800 flex-grow overflow-hidden flex flex-col h-[300px] lg:h-auto">
+                <div className="bg-gray-900/50 p-6 rounded-xl border border-gray-800 flex-grow overflow-hidden flex flex-col h-[200px] lg:h-auto">
                     <h3 className="text-gray-300 font-semibold mb-4 text-sm uppercase tracking-wider">Session Highlights</h3>
                     <div className="flex-grow overflow-y-auto space-y-3 pr-2 custom-scrollbar">
                         {highlights.length === 0 ? (

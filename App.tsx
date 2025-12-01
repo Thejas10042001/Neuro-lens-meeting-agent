@@ -7,8 +7,6 @@ import { CameraIcon } from './components/icons/CameraIcon';
 import { EyeIcon } from './components/icons/EyeIcon';
 import { CursorClickIcon } from './components/icons/CursorClickIcon';
 import { BrainIcon } from './components/icons/BrainIcon';
-import { ChipIcon } from './components/icons/ChipIcon';
-import { ChartBarIcon } from './components/icons/ChartBarIcon';
 import { UserGroupIcon } from './components/icons/UserGroupIcon';
 import { PresentationChartLineIcon } from './components/icons/PresentationChartLineIcon';
 
