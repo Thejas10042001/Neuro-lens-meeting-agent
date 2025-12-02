@@ -1,7 +1,7 @@
+
 import React, { useState } from 'react';
 import Dashboard from './components/Dashboard';
 import MeetingAgent from './components/MeetingAgent';
-import MeetingGuardian from './components/MeetingGuardian';
 import FeatureCard from './components/FeatureCard';
 import { CameraIcon } from './components/icons/CameraIcon';
 import { EyeIcon } from './components/icons/EyeIcon';
@@ -9,9 +9,8 @@ import { CursorClickIcon } from './components/icons/CursorClickIcon';
 import { BrainIcon } from './components/icons/BrainIcon';
 import { UserGroupIcon } from './components/icons/UserGroupIcon';
 import { PresentationChartLineIcon } from './components/icons/PresentationChartLineIcon';
-import { ShieldCheckIcon } from './components/icons/ShieldCheckIcon';
 
-type AppMode = 'personal' | 'meeting' | 'guardian';
+type AppMode = 'personal' | 'meeting';
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>('personal');
@@ -58,17 +57,6 @@ const App: React.FC = () => {
             >
               <UserGroupIcon className="w-4 h-4" />
               Meeting Agent
-            </button>
-            <button
-              onClick={() => setMode('guardian')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${
-                mode === 'guardian' 
-                  ? 'bg-gray-800 text-white shadow-lg shadow-emerald-500/10 border border-gray-700' 
-                  : 'text-gray-400 hover:text-gray-200'
-              }`}
-            >
-              <ShieldCheckIcon className="w-4 h-4" />
-              AI Guardian
             </button>
           </div>
         </header>
@@ -128,12 +116,6 @@ const App: React.FC = () => {
                  </div>
                  <MeetingAgent />
             </section>
-          )}
-
-          {mode === 'guardian' && (
-             <section className="mb-12">
-                 <MeetingGuardian />
-             </section>
           )}
         </div>
 
