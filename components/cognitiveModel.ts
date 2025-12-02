@@ -1,52 +1,12 @@
 
 import type { CognitiveDataPoint } from '../types';
 
-// --- MATH UTILS: KALMAN FILTER FOR SIGNAL SMOOTHING ---
-class KalmanFilter {
-  private R = 1; // Process noise
-  private Q = 1; // Measurement noise
-  private A = 1; // State vector
-  private B = 0; // Control vector
-  private C = 1; // Measurement vector
-  private cov = NaN;
-  private x = NaN; // Estimated signal
-
-  constructor(processNoise: number, measurementNoise: number) {
-    this.R = processNoise;
-    this.Q = measurementNoise;
-  }
-
-  filter(measurement: number) {
-    if (isNaN(this.x)) {
-      this.x = (1 / this.C) * measurement;
-      this.cov = (1 / this.C) * this.Q * (1 / this.C);
-    } else {
-      const predX = (this.A * this.x) + (this.B * 0);
-      const predCov = ((this.A * this.cov) * this.A) + this.R;
-
-      const K = predCov * this.C * (1 / ((this.C * predCov * this.C) + this.Q));
-      this.x = predX + K * (measurement - (this.C * predX));
-      this.cov = predCov - (K * this.C * predCov);
-    }
-    return this.x;
-  }
-}
-
-// Represents Precise Biometric Inputs derived from Face Landmarks
-export interface BiometricInput {
-    yaw: number; // Head rotation left/right (degrees)
-    pitch: number; // Head tilt up/down (degrees)
-    roll: number; // Head tilt side-to-side (degrees)
-    ear: number; // Eye Aspect Ratio (0.0 closed - 0.3+ open)
-    blinkRate: number; // Blinks per minute
-    expressionConfidence: {
-        neutral: number;
-        happy: number;
-        angry: number;
-        fearful: number;
-        surprised: number;
-    };
-    interactionLevel: number;
+// Represents the simulated inputs to our model
+export interface CognitiveModelInput {
+    interactionLevel: number; // 0-1, how active the user is
+    simulatedGazeFocus: number; // 0-1, is user looking at relevant things
+    simulatedValence: 'positive' | 'negative' | 'neutral'; // from facial expression
+    visualScanning: number; // 0-1, represents active visual exploration/reading
 }
 
 // Internal state of our cognitive model
@@ -54,102 +14,98 @@ interface CognitiveModelState {
     attention: number;
     stress: number;
     curiosity: number;
-    lastUpdate: number;
+    fatigue: number; // increases over time, reduces attention recovery
+    engagement: number; // builds up with interaction, boosts curiosity
 }
+
+// A simple leaky integrator/decay function
+const decay = (value: number, rate: number) => Math.max(0, value * (1 - rate));
+const approach = (current: number, target: number, amount: number) => {
+    return current < target ? Math.min(current + amount, target) : Math.max(current - amount, target);
+};
+
 
 export class CognitiveModel {
     private state: CognitiveModelState;
-    
-    // Filters to smooth out noisy webcam data for medical-grade curves
-    private attentionFilter = new KalmanFilter(0.1, 10);
-    private stressFilter = new KalmanFilter(0.1, 5);
-    private curiosityFilter = new KalmanFilter(0.1, 8);
 
     constructor() {
         this.state = {
             attention: 50,
             stress: 30,
             curiosity: 60,
-            lastUpdate: Date.now(),
+            fatigue: 0,
+            engagement: 0.5,
         };
     }
 
-    public update(input: BiometricInput): CognitiveDataPoint {
-        this.state.lastUpdate = Date.now();
+    public update(input: CognitiveModelInput): CognitiveDataPoint {
+        // --- Update internal state based on previous state ---
 
-        // --- 1. PRECISE ATTENTION CALCULATION (GEOMETRIC) ---
-        // A user looking directly at screen has Yaw ~ 0, Pitch ~ -5 to 5.
-        // Penalty increases exponentially as angle increases.
-        const yawPenalty = Math.pow(Math.abs(input.yaw), 1.6); // Punish side looking
-        const pitchPenalty = Math.pow(Math.abs(input.pitch - 5), 1.6); // Assume slight down-tilt is normal
+        // Fatigue increases slowly, faster with high stress
+        this.state.fatigue = Math.min(1, this.state.fatigue + 0.005 + (this.state.stress / 100) * 0.005);
         
-        // Base attention from head pose
-        let rawAttention = 100 - (yawPenalty + pitchPenalty);
+        // Engagement decays but is boosted by interaction
+        this.state.engagement = decay(this.state.engagement, 0.02);
+        this.state.engagement = Math.min(1, this.state.engagement + input.interactionLevel * 0.1);
+
+
+        // --- Calculate new cognitive values based on inputs and state ---
         
-        // Eye Aspect Ratio check (Drowsiness/Distraction)
-        // EAR < 0.20 usually means eyes closing/looking down
-        if (input.ear < 0.20) {
-            rawAttention -= 50; 
+        // Attention:
+        // - Boosted by interaction and gaze focus.
+        // - Reduced by fatigue and stress.
+        // - Has a natural tendency to drift towards 50.
+        let attentionTarget = 50;
+        attentionTarget += input.simulatedGazeFocus * 50; // High gaze = target 100
+        attentionTarget -= this.state.fatigue * 30; // High fatigue = target drops
+        attentionTarget -= (this.state.stress / 100) * 20; // High stress = target drops
+        this.state.attention = approach(this.state.attention, attentionTarget, input.interactionLevel > 0 ? 5 : 2);
+
+
+        // Stress:
+        // - Increases with cognitive load (sustained high attention).
+        // - Spikes with negative valence.
+        // - Slowly decreases otherwise.
+        let stressChange = -0.5; // Natural decay
+        if (this.state.attention > 80) {
+            stressChange += 1.5; // Cognitive load
         }
+        if (input.simulatedValence === 'negative') {
+            stressChange += 20; // Sudden stress event
+        }
+        if (input.simulatedValence === 'positive') {
+            stressChange -= 5; // Positive event reduces stress
+        }
+        this.state.stress = this.state.stress + stressChange;
 
-        // Clamp
-        rawAttention = Math.max(0, Math.min(100, rawAttention));
-        const smoothedAttention = this.attentionFilter.filter(rawAttention);
-
-        // --- 2. STRESS CALCULATION (PHYSIOLOGICAL) ---
-        // Factors:
-        // - Blink Rate: Normal is 10-20. >25 is stress/nervousness. <5 is high cognitive load or staring.
-        // - Expression: Angry/Fearful micro-expressions.
+        // Curiosity:
+        // - Boosted by high engagement and interaction bursts.
+        // - Boosted by visual scanning (eye tracking proxy).
+        // - Decays naturally.
+        let curiosityChange = -0.8; // Natural decay
         
-        let stressBase = 30; // Baseline
-
-        // Blink Rate Analysis
-        if (input.blinkRate > 30) stressBase += 30; // Panic / High Anxiety
-        else if (input.blinkRate > 20) stressBase += 15; // Mild Stress
-        else if (input.blinkRate < 5) stressBase += 10; // Intense Stare (can be stress or focus)
-
-        // Micro-expression injection (Weighted)
-        stressBase += (input.expressionConfidence.angry * 60);
-        stressBase += (input.expressionConfidence.fearful * 70);
-        stressBase += (input.expressionConfidence.neutral * -10); // Neutral face reduces stress estimate
-        
-        // Mitigation by positive affect
-        stressBase -= (input.expressionConfidence.happy * 30);
-
-        const smoothedStress = this.stressFilter.filter(Math.max(0, Math.min(100, stressBase)));
-
-        // --- 3. CURIOSITY & FLOW (DERIVED) ---
-        // Flow State = High Attention + Moderate/Low Stress + Challenge Match
-        // Curiosity = Forward Lean (Pitch) + Surprised/Happy Expressions + High Attention
-        
-        let curiosityBase = 50;
-        
-        // Flow triggers
-        if (smoothedAttention > 80 && smoothedStress < 40) {
-            curiosityBase += 20; // Flow state bonus
+        if (input.interactionLevel > 0.7 && this.state.engagement > 0.6) {
+             curiosityChange += 4; // Bursts of interaction
         }
         
-        // Leaning in (Pitch is negative, e.g., -10 to -25)
-        if (input.pitch < -5 && input.pitch > -25) {
-            curiosityBase += 15;
+        // Visual scanning (reading, looking around) indicates information seeking
+        if (input.visualScanning > 0.2) {
+            curiosityChange += input.visualScanning * 4;
         }
-        
-        // Expression triggers
-        curiosityBase += (input.expressionConfidence.surprised * 50);
-        curiosityBase += (input.expressionConfidence.happy * 20);
-        
-        const smoothedCuriosity = this.curiosityFilter.filter(Math.max(0, Math.min(100, curiosityBase)));
 
-        // Update internal state
-        this.state.attention = smoothedAttention;
-        this.state.stress = smoothedStress;
-        this.state.curiosity = smoothedCuriosity;
+        this.state.curiosity = this.state.curiosity + curiosityChange;
+
+
+        // Clamp all values between 0 and 100
+        this.state.attention = Math.max(0, Math.min(100, this.state.attention));
+        this.state.stress = Math.max(0, Math.min(100, this.state.stress));
+        this.state.curiosity = Math.max(0, Math.min(100, this.state.curiosity));
 
         return {
             time: Date.now(),
-            attention: parseFloat(this.state.attention.toFixed(2)),
-            stress: parseFloat(this.state.stress.toFixed(2)),
-            curiosity: parseFloat(this.state.curiosity.toFixed(2)),
+            attention: this.state.attention,
+            stress: this.state.stress,
+            curiosity: this.state.curiosity,
         };
     }
 }
