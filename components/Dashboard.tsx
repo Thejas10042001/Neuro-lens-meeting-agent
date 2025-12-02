@@ -6,21 +6,18 @@ import { DownloadIcon } from './icons/DownloadIcon';
 import { ExclamationIcon } from './icons/ExclamationIcon';
 import { XIcon } from './icons/XIcon';
 import { CognitiveModel, BiometricInput } from './cognitiveModel';
-import { LightBulbIcon } from './icons/LightBulbIcon';
-import { BellIcon } from './icons/BellIcon';
-import { HistoryIcon } from './icons/HistoryIcon';
 import { ZapIcon } from './icons/ZapIcon';
+import { HistoryIcon } from './icons/HistoryIcon';
 import { FlameIcon } from './icons/FlameIcon';
-import { TrendingDownIcon } from './icons/TrendingDownIcon';
 
 // Access global faceapi
 const faceapi = (window as any).faceapi;
 
 const MAX_DATA_POINTS = 30;
 const MAX_HISTORY_POINTS = 5000;
-const STORAGE_KEY = 'neuroLensHistory';
 const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
 
+// Thresholds
 const HIGH_STRESS_THRESHOLD = 85;
 const STRESS_ALERT_DURATION_COUNT = 4; 
 const STRESS_RECOVERY_THRESHOLD = 70;
@@ -35,23 +32,21 @@ interface SummaryState {
 
 const getCognitiveSummary = (point: CognitiveDataPoint): SummaryState => {
     const { attention, stress, curiosity } = point;
+    if (attention > 85 && stress < 35) return { text: "Deep Flow State", color: "text-cyan-300" };
     if (attention > 75 && stress > 65) return { text: "Cognitive Overload", color: "text-amber-400" };
-    if (attention > 85 && stress < 30) return { text: "Deep Flow State", color: "text-cyan-300" };
-    if (curiosity > 70 && attention > 60) return { text: "Active Learning", color: "text-violet-400" };
-    if (stress > 70 && attention < 40) return { text: "High Stress / Anxiety", color: "text-rose-500" };
+    if (curiosity > 75) return { text: "Active Learning", color: "text-violet-400" };
+    if (stress > 75) return { text: "High Stress", color: "text-rose-500" };
     if (attention < 30) return { text: "Distracted", color: "text-yellow-500" };
-    if (stress > 60) return { text: "Elevated Stress", color: "text-red-500" };
-    if (curiosity > 75) return { text: "Highly Curious", color: "text-purple-400" };
     return { text: "Nominal State", color: "text-gray-300" };
 };
 
 const getPersonalizedSuggestion = (summaryText: string): string => {
     switch (summaryText) {
-        case "Cognitive Overload": return "Your cognitive load is peaking. Take a 2-minute eye-rest break.";
-        case "Deep Flow State": return "Optimal performance detected. Maintain current environment.";
+        case "Cognitive Overload": return "Cognitive load peaking. Take a 2-minute eye-rest break.";
+        case "Deep Flow State": return "Optimal performance detected. Maintain current focus.";
         case "Distracted": return "Head pose indicates distraction. Re-align with the screen.";
-        case "High Stress / Anxiety": return "Blink rate volatility detected. Try box breathing (4-4-4-4).";
-        case "Elevated Stress": return "Facial tension detected. Relax your jaw and shoulders.";
+        case "High Stress": return "Blink volatility high. Try box breathing (4-4-4-4).";
+        case "Active Learning": return "Engagement is high. Great time for complex tasks.";
         default: return "Biometrics nominal. Continuing analysis.";
     }
 }
@@ -100,12 +95,6 @@ const CognitiveChart: React.FC<CognitiveChartProps> = ({ data, dataKey, color, n
    </div>
 )};
 
-const getIntensityColor = (type: Notification['type'], intensity: number): string => {
-    if (type === 'stress') return intensity > 0.7 ? 'bg-red-500' : 'bg-orange-500';
-    if (type === 'low-attention') return intensity > 0.7 ? 'bg-yellow-500' : 'bg-yellow-400';
-    return 'bg-gray-500';
-};
-
 const CognitiveGauge: React.FC<{ value: number; label: string; colorClassName: string }> = ({ value, label, colorClassName }) => {
     const radius = 42;
     const circumference = 2 * Math.PI * radius;
@@ -134,14 +123,14 @@ const Dashboard: React.FC = () => {
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [modelsLoaded, setModelsLoaded] = useState(false);
     
-    // Biometric Stats State for UI
+    // Biometric Stats State for UI display
     const [biometrics, setBiometrics] = useState({ yaw: 0, pitch: 0, roll: 0, ear: 0, blinkRate: 0 });
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const modelRef = useRef(new CognitiveModel());
     
     // Blink detection vars
-    const blinksRef = useRef<number[]>([]); // Timestamps of blinks
+    const blinksRef = useRef<number[]>([]); 
     const isBlinkingRef = useRef(false);
 
     // Alert Logic Refs
@@ -183,11 +172,11 @@ const Dashboard: React.FC = () => {
     useEffect(() => {
         const loadModels = async () => {
             if (!faceapi) {
-                setCameraError("Biometric engine (FaceAPI) missing. Check connection.");
+                setCameraError("Biometric engine (FaceAPI) missing. Check script loading.");
                 return;
             }
             try {
-                // Switching to SSD Mobilenet V1 for Higher Accuracy (99% target)
+                // Using SSD Mobilenet V1 for 99% accuracy target (vs TinyFaceDetector)
                 await Promise.all([
                     faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
                     faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
@@ -195,6 +184,7 @@ const Dashboard: React.FC = () => {
                 ]);
                 setModelsLoaded(true);
             } catch (e) {
+                console.error(e);
                 setCameraError("Failed to load biometric models.");
             }
         };
@@ -206,7 +196,8 @@ const Dashboard: React.FC = () => {
         if (!videoRef.current || !modelsLoaded || !faceapi) return;
 
         const video = videoRef.current;
-        // Using SsdMobilenetv1Options for High Precision Detection (slower but accurate)
+        
+        // High Precision Detection: SsdMobilenetv1
         const detections = await faceapi.detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
             .withFaceLandmarks()
             .withFaceExpressions();
@@ -215,30 +206,29 @@ const Dashboard: React.FC = () => {
             const landmarks = detections.landmarks;
             const expr = detections.expressions;
 
-            // 1. Head Pose Estimation (Geometric)
+            // 1. Geometric Head Pose Calculation
             const nose = landmarks.getNose()[3];
             const jaw = landmarks.getJawOutline()[8];
             const leftEye = landmarks.getLeftEye()[0];
             const rightEye = landmarks.getRightEye()[3];
             
-            // Yaw (Left/Right)
+            // Yaw (Left/Right Rotation)
             const eyeDist = rightEye.x - leftEye.x;
             const midEye = { x: leftEye.x + eyeDist/2, y: leftEye.y };
             const noseOffset = nose.x - midEye.x;
-            const yaw = (noseOffset / eyeDist) * 90; // Approx degrees
+            const yaw = (noseOffset / eyeDist) * 90; 
 
-            // Pitch (Up/Down)
+            // Pitch (Up/Down Tilt)
             const jawDist = jaw.y - nose.y;
-            const expectedJawDist = eyeDist * 1.2; // roughly
+            const expectedJawDist = eyeDist * 1.2; 
             const pitch = ((jawDist - expectedJawDist) / expectedJawDist) * 90;
 
-            // Roll (Tilt Side-to-Side) - Precise calculation
+            // Roll (Side-to-Side Tilt)
             const dy = rightEye.y - leftEye.y;
             const dx = rightEye.x - leftEye.x;
             const roll = Math.atan2(dy, dx) * (180 / Math.PI);
 
-            // 2. Eye Aspect Ratio (EAR) for blinking
-            // EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
+            // 2. Eye Aspect Ratio (EAR) for Drowsiness/Blink
             const getEAR = (eye: any[]) => {
                 const A = Math.hypot(eye[1].x - eye[5].x, eye[1].y - eye[5].y);
                 const B = Math.hypot(eye[2].x - eye[4].x, eye[2].y - eye[4].y);
@@ -249,7 +239,7 @@ const Dashboard: React.FC = () => {
             const rightEAR = getEAR(landmarks.getRightEye());
             const avgEAR = (leftEAR + rightEAR) / 2;
 
-            // Blink Detection Logic
+            // Blink Logic
             if (avgEAR < 0.18) {
                 if (!isBlinkingRef.current) {
                     isBlinkingRef.current = true;
@@ -259,9 +249,9 @@ const Dashboard: React.FC = () => {
                 isBlinkingRef.current = false;
             }
 
-            // Calculate Blink Rate (blinks per minute)
+            // Calculate Blink Rate (Rolling 60s window)
             const now = Date.now();
-            blinksRef.current = blinksRef.current.filter(t => now - t < 60000); // Keep last 60s
+            blinksRef.current = blinksRef.current.filter(t => now - t < 60000); 
             const blinkRate = blinksRef.current.length;
 
             setBiometrics({
@@ -272,7 +262,7 @@ const Dashboard: React.FC = () => {
                 blinkRate
             });
 
-            // 3. Update Mathematical Model with Precise Inputs
+            // 3. Update Model
             const input: BiometricInput = {
                 yaw,
                 pitch,
@@ -286,15 +276,15 @@ const Dashboard: React.FC = () => {
                     fearful: expr.fearful,
                     surprised: expr.surprised
                 },
-                interactionLevel: 0 // Will rely on pure biometrics
+                interactionLevel: 0 
             };
 
             const newPoint = modelRef.current.update(input);
             processNewDataPoint(newPoint);
         } else {
-            // No face detected - penalized heavily
+            // Face Lost Handling
              const newPoint = modelRef.current.update({
-                yaw: 45, pitch: 45, roll: 0, ear: 0.3, blinkRate: 15,
+                yaw: 45, pitch: 45, roll: 0, ear: 0.3, blinkRate: 0,
                 expressionConfidence: { neutral: 0, happy: 0, angry: 0, fearful: 0, surprised: 0 },
                 interactionLevel: 0
             });
@@ -314,24 +304,23 @@ const Dashboard: React.FC = () => {
         setCognitiveSummary(summary);
         setSuggestion(getPersonalizedSuggestion(summary.text));
 
-        // Stress Logic
+        // Alert Triggers
         if (newPoint.stress > HIGH_STRESS_THRESHOLD) highStressCounter.current++;
         else highStressCounter.current = 0;
         
         if (highStressCounter.current > STRESS_ALERT_DURATION_COUNT && !highStressAlertActive.current) {
             playAlertSound('stress');
-            setNotifications(p => [...p, { id: Date.now(), type: 'stress', title: 'Stress Spike', message: 'Biometrics indicate high tension.', intensity: 1 }]);
+            setNotifications(p => [...p, { id: Date.now(), type: 'stress', title: 'Stress Spike', message: 'High tension detected.', intensity: 1 }]);
             highStressAlertActive.current = true;
         }
         if (newPoint.stress < STRESS_RECOVERY_THRESHOLD) highStressAlertActive.current = false;
 
-        // Attention Logic
         if (newPoint.attention < LOW_ATTENTION_THRESHOLD) lowAttentionCounter.current++;
         else lowAttentionCounter.current = 0;
 
         if (lowAttentionCounter.current > LOW_ATTENTION_DURATION_COUNT && !lowAttentionAlertActive.current) {
             playAlertSound('attention');
-             setNotifications(p => [...p, { id: Date.now(), type: 'low-attention', title: 'Focus Lost', message: 'Head pose or eye closure detected.', intensity: 1 }]);
+             setNotifications(p => [...p, { id: Date.now(), type: 'low-attention', title: 'Focus Lost', message: 'Distraction detected.', intensity: 1 }]);
             lowAttentionAlertActive.current = true;
         }
         if (newPoint.attention > LOW_ATTENTION_RECOVERY_THRESHOLD) lowAttentionAlertActive.current = false;
@@ -342,7 +331,7 @@ const Dashboard: React.FC = () => {
     const initializeCamera = useCallback(async () => {
         setCameraError(null);
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } }); // Higher res for accuracy
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } }); 
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
             }
@@ -356,7 +345,7 @@ const Dashboard: React.FC = () => {
         initializeCamera();
         const interval = setInterval(() => {
             analyzeBiometrics();
-        }, 200); // 5 FPS for smoother high-accuracy tracking
+        }, 250); // 4 FPS for SsdMobilenetv1 balance
         return () => clearInterval(interval);
     }, [initializeCamera, analyzeBiometrics]);
 
@@ -453,8 +442,8 @@ const Dashboard: React.FC = () => {
                     </div>
 
                     <div className="space-y-4">
-                        <CognitiveChart data={chartData} dataKey="attention" color="#22d3ee" name="Attention Level (Head Pose & Gaze)" timeRange={timeRange} />
-                        <CognitiveChart data={chartData} dataKey="stress" color="#f43f5e" name="Stress Level (HRV & Micro-expressions)" timeRange={timeRange} />
+                        <CognitiveChart data={chartData} dataKey="attention" color="#22d3ee" name="Attention (Gaze/Pose)" timeRange={timeRange} />
+                        <CognitiveChart data={chartData} dataKey="stress" color="#f43f5e" name="Stress (HRV/Expressions)" timeRange={timeRange} />
                         <CognitiveChart data={chartData} dataKey="curiosity" color="#a78bfa" name="Flow/Curiosity Index" timeRange={timeRange} />
                     </div>
 
